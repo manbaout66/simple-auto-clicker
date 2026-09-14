@@ -1,0 +1,4 @@
+# 本地配置与数据，不入库
+config.json
+presets/
+*.log
