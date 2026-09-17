@@ -17,44 +17,72 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
-# ---------- 2. 底层接口（user32.dll）：鼠标模拟 + 全局按键检测 ----------
+# ---------- 2. 底层接口（user32.dll）：鼠标模拟（SendInput）+ 全局按键检测 ----------
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class MouseSim {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT {
+        public uint type;
+        public MOUSEINPUT mi;
+    }
+    [DllImport("user32.dll")]
+    public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     // 检测"自上次调用后是否被按下过"（低位标志，轮询不漏检）
     public static bool WasKeyPressed(int vKey) {
         return (GetAsyncKeyState(vKey) & 0x0001) != 0;
     }
 
-    public const uint LEFTDOWN=0x02, LEFTUP=0x04, RIGHTDOWN=0x08, RIGHTUP=0x10, MIDDLEDOWN=0x20, MIDDLEUP=0x40;
-
     public static void MoveTo(int x, int y) {
         SetCursorPos(x, y);
-        System.Threading.Thread.Sleep(30);
+        System.Threading.Thread.Sleep(50);
     }
 
     // btn : 1=左键 2=右键 3=中键 ; type: 1=单击 2=双击 3=长按
     public static void Click(int btn, int type) {
         uint down = 0, up = 0;
-        if (btn == 1)      { down = LEFTDOWN;   up = LEFTUP; }
-        else if (btn == 2) { down = RIGHTDOWN;  up = RIGHTUP; }
-        else               { down = MIDDLEDOWN; up = MIDDLEUP; }
+        if (btn == 1)      { down = 0x0002; up = 0x0004; }   // LEFTDOWN / LEFTUP
+        else if (btn == 2) { down = 0x0008; up = 0x0010; }   // RIGHTDOWN / RIGHTUP
+        else               { down = 0x0020; up = 0x0040; }   // MIDDLEDOWN / MIDDLEUP
 
-        int holdMs = (type == 3) ? 500 : 0;
+        int holdMs = (type == 3) ? 500 : 0;   // 长按保持 500ms
 
-        mouse_event(down, 0, 0, 0, UIntPtr.Zero);
+        INPUT[] inp = new INPUT[1];
+        inp[0].type = 0;                       // INPUT_MOUSE
+        inp[0].mi.dx = 0;
+        inp[0].mi.dy = 0;
+        inp[0].mi.mouseData = 0;
+        inp[0].mi.time = 0;
+        inp[0].mi.dwExtraInfo = IntPtr.Zero;
+        int cb = Marshal.SizeOf(inp[0]);
+
+        // 按下
+        inp[0].mi.dwFlags = down;
+        SendInput(1, inp, cb);
         if (holdMs > 0) System.Threading.Thread.Sleep(holdMs);
-        mouse_event(up, 0, 0, 0, UIntPtr.Zero);
+        // 抬起
+        inp[0].mi.dwFlags = up;
+        SendInput(1, inp, cb);
 
+        // 双击：间隔后再来一次
         if (type == 2) {
-            System.Threading.Thread.Sleep(50);
-            mouse_event(down, 0, 0, 0, UIntPtr.Zero);
-            mouse_event(up,   0, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(60);
+            inp[0].mi.dwFlags = down; SendInput(1, inp, cb);
+            inp[0].mi.dwFlags = up;   SendInput(1, inp, cb);
         }
     }
 }
@@ -93,7 +121,7 @@ function Test-DelayString([string]$s) {
 
 # ---------- 5. 创建主窗口 ----------
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "简单连点器 v3.1"
+$form.Text = "简单连点器 v3.2"
 $form.Size = New-Object System.Drawing.Size(680, 560)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
@@ -619,5 +647,13 @@ $form.Add_FormClosing({
 # ---------- 17. 启动 ----------
 Refresh-PresetList
 Load-CfgFromFile $script:cfgPath
+
+# 检测是否以管理员权限运行（点管理员窗口需要提权）
+$isAdmin = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    $lblStatus.Text = "就绪（普通权限；若点不了管理员窗口/游戏，右键->以管理员身份运行）"
+    $lblStatus.ForeColor = [System.Drawing.Color]::DarkOrange
+}
+
 $form.ShowDialog()
 
