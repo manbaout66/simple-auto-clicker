@@ -49,8 +49,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "AutoClicker.ps1"
 ├── AutoClicker.ps1      # 主程序源码（纯 PowerShell，中文注释）
 ├── AutoClicker.exe      # 打包好的独立应用
 ├── 启动连点器.bat        # 源码方式启动入口
-├── config.json          # 自动保存的配置（运行时生成，不入库）
-└── presets/             # 保存的预设方案（运行时生成，不入库）
+└── （配置与预设自动存到 %APPDATA%\SimpleAutoClicker\，不污染 exe 旁边）
 ```
 
 ## 自行打包 exe

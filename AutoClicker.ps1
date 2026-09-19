@@ -88,16 +88,9 @@ public class MouseSim {
 }
 "@
 
-# ---------- 3. 应用目录（兼容两种运行方式：双击 bat 跑脚本 / 双击 exe 打包版） ----------
-$script:appDir = ""
-$procFile = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-if ($procFile -match "powershell(\.exe)?$|pwsh(\.exe)?$") {
-    # 方式一：以 .ps1 脚本运行（bat 启动）-> 目录 = 脚本所在目录
-    $script:appDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-} else {
-    # 方式二：以打包 exe 运行 -> 目录 = exe 所在目录
-    $script:appDir = Split-Path -Parent $procFile
-}
+# ---------- 3. 应用目录：配置统一存 %APPDATA%\SimpleAutoClicker\，不污染桌面/exe 旁边 ----------
+$script:appDir = Join-Path $env:APPDATA "SimpleAutoClicker"
+if (-not (Test-Path $script:appDir)) { New-Item -ItemType Directory -Path $script:appDir -Force | Out-Null }
 $script:cfgPath = Join-Path $script:appDir "config.json"
 $script:presetDir = Join-Path $script:appDir "presets"
 
@@ -121,7 +114,7 @@ function Test-DelayString([string]$s) {
 
 # ---------- 5. 创建主窗口 ----------
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "简单连点器 v3.2"
+$form.Text = "简单连点器 v3.3"
 $form.Size = New-Object System.Drawing.Size(680, 560)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
