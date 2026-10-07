@@ -1,14 +1,14 @@
 ﻿# ============================================================
-#  简单连点器 v3.1（参考手机"自动点击器"）
+#  简单连点器 v3.4（参考手机"自动点击器"）
 #  功能：
 #   1. 多任务点：按顺序循环执行，每任务独立 坐标/按键/类型/延时/偏移
 #   2. 点击类型：单击 / 双击 / 长按(500ms)；按键：左/右/中键
 #   3. 随机延时：任务延时支持区间写法，如 "1~3" = 每次随机 1~3 秒
 #   4. 随机偏移：每任务可设 ±N 像素，点击位置随机抖动
 #   5. 执行轮数限制（0=无限）+ 轮间间隔 + 开始前倒计时
-#   6. 预设方案：可保存多套配置到 presets 文件夹，随时加载/删除
-#   7. 全局热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存预设
-#   8. 配置自动保存（config.json），下次打开自动恢复
+#   6. 预设方案：新建 / 保存(覆盖当前选中) / 加载 / 删除
+#   7. 全局热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存当前预设
+#   8. 配置自动保存（%APPDATA%\SimpleAutoClicker\config.json），下次打开自动恢复
 #  使用：双击同目录「启动连点器.bat」，零依赖、绿色无害
 # ============================================================
 
@@ -114,7 +114,7 @@ function Test-DelayString([string]$s) {
 
 # ---------- 5. 创建主窗口 ----------
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "简单连点器 v3.3"
+$form.Text = "简单连点器 v3.4"
 $form.Size = New-Object System.Drawing.Size(680, 560)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
@@ -249,39 +249,45 @@ $form.Controls.Add($txtCountdown)
 
 # ---------- 9. 预设方案区 ----------
 $lblPreset = New-Object System.Windows.Forms.Label
-$lblPreset.Text = "预设："
+$lblPreset.Text = "预设方案："
 $lblPreset.Location = New-Object System.Drawing.Point(12, 374)
-$lblPreset.Size = New-Object System.Drawing.Size(50, 25)
+$lblPreset.Size = New-Object System.Drawing.Size(62, 25)
 
 $cmbPreset = New-Object System.Windows.Forms.ComboBox
-$cmbPreset.Location = New-Object System.Drawing.Point(62, 371)
-$cmbPreset.Size = New-Object System.Drawing.Size(200, 25)
+$cmbPreset.Location = New-Object System.Drawing.Point(74, 371)
+$cmbPreset.Size = New-Object System.Drawing.Size(170, 25)
 $cmbPreset.DropDownStyle = "DropDownList"
 
 $btnSavePreset = New-Object System.Windows.Forms.Button
 $btnSavePreset.Text = "保存 (F12)"
-$btnSavePreset.Location = New-Object System.Drawing.Point(270, 371)
+$btnSavePreset.Location = New-Object System.Drawing.Point(252, 371)
 $btnSavePreset.Size = New-Object System.Drawing.Size(90, 30)
+
+$btnNewPreset = New-Object System.Windows.Forms.Button
+$btnNewPreset.Text = "新建"
+$btnNewPreset.Location = New-Object System.Drawing.Point(347, 371)
+$btnNewPreset.Size = New-Object System.Drawing.Size(60, 30)
 
 $btnLoadPreset = New-Object System.Windows.Forms.Button
 $btnLoadPreset.Text = "加载"
-$btnLoadPreset.Location = New-Object System.Drawing.Point(365, 371)
+$btnLoadPreset.Location = New-Object System.Drawing.Point(412, 371)
 $btnLoadPreset.Size = New-Object System.Drawing.Size(60, 30)
 
 $btnDelPreset = New-Object System.Windows.Forms.Button
 $btnDelPreset.Text = "删除"
-$btnDelPreset.Location = New-Object System.Drawing.Point(430, 371)
+$btnDelPreset.Location = New-Object System.Drawing.Point(477, 371)
 $btnDelPreset.Size = New-Object System.Drawing.Size(60, 30)
 
 $form.Controls.Add($lblPreset)
 $form.Controls.Add($cmbPreset)
 $form.Controls.Add($btnSavePreset)
+$form.Controls.Add($btnNewPreset)
 $form.Controls.Add($btnLoadPreset)
 $form.Controls.Add($btnDelPreset)
 
 # ---------- 10. 热键提示 + 状态栏 + 开始按钮 ----------
 $lblHotkey = New-Object System.Windows.Forms.Label
-$lblHotkey.Text = "热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存预设"
+$lblHotkey.Text = "热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存到当前预设"
 $lblHotkey.Location = New-Object System.Drawing.Point(12, 412)
 $lblHotkey.Size = New-Object System.Drawing.Size(620, 25)
 $lblHotkey.ForeColor = [System.Drawing.Color]::DarkBlue
@@ -350,15 +356,34 @@ function Refresh-PresetList {
 }
 
 function Save-Preset {
-    $name = [Microsoft.VisualBasic.Interaction]::InputBox("请输入预设名称：", "保存预设", "预设1")
+    # 保存 = 覆盖保存到当前选中的预设（不弹新建框）
+    if ($null -eq $cmbPreset.SelectedItem) {
+        [System.Windows.Forms.MessageBox]::Show("请先在列表中选择要保存到的预设，或用「新建」创建一个", "提示")
+        return
+    }
+    $name = [string]$cmbPreset.SelectedItem
+    if (-not (Test-Path $script:presetDir)) { New-Item -ItemType Directory -Path $script:presetDir -Force | Out-Null }
+    Save-CfgToFile (Join-Path $script:presetDir ($name + ".json"))
+    $lblStatus.Text = "已保存到预设「$name」"
+    $lblStatus.ForeColor = [System.Drawing.Color]::DarkOrange
+}
+
+function New-Preset {
+    # 新建 = 输入名称创建一个新预设，创建后自动选中，之后「保存」就存到它
+    $name = [Microsoft.VisualBasic.Interaction]::InputBox("请输入新预设名称：", "新建预设", "预设" + (Get-Random -Minimum 1 -Maximum 999))
     $name = $name.Trim()
     if (-not $name) { return }
     if (-not (Test-Path $script:presetDir)) { New-Item -ItemType Directory -Path $script:presetDir -Force | Out-Null }
     $path = Join-Path $script:presetDir ($name + ".json")
+    if (Test-Path $path) {
+        $r = [System.Windows.Forms.MessageBox]::Show("预设「$name」已存在，要覆盖吗？", "确认",
+             [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    }
     Save-CfgToFile $path
     Refresh-PresetList
     $cmbPreset.SelectedItem = $name
-    $lblStatus.Text = "已保存预设「$name」"
+    $lblStatus.Text = "已新建预设「$name」，F12 可随时保存到它"
     $lblStatus.ForeColor = [System.Drawing.Color]::DarkOrange
 }
 
@@ -394,6 +419,7 @@ function Delete-Preset {
 }
 
 $btnSavePreset.Add_Click({ Save-Preset })
+$btnNewPreset.Add_Click({ New-Preset })
 $btnLoadPreset.Add_Click({ Load-Preset })
 $btnDelPreset.Add_Click({ Delete-Preset })
 
@@ -546,7 +572,8 @@ function Start-Clicker {
     $btnAdd.Enabled = $false; $btnPick.Enabled = $false
     $btnDel.Enabled = $false; $btnClear.Enabled = $false
     $txtRounds.Enabled = $false; $txtGap.Enabled = $false; $txtCountdown.Enabled = $false
-    $btnSavePreset.Enabled = $false; $btnLoadPreset.Enabled = $false; $btnDelPreset.Enabled = $false
+    $btnSavePreset.Enabled = $false; $btnNewPreset.Enabled = $false
+    $btnLoadPreset.Enabled = $false; $btnDelPreset.Enabled = $false
     $cmbPreset.Enabled = $false
 
     $script:tasks = $list
@@ -581,7 +608,8 @@ function Stop-Clicker {
     $btnAdd.Enabled = $true; $btnPick.Enabled = $true
     $btnDel.Enabled = $true; $btnClear.Enabled = $true
     $txtRounds.Enabled = $true; $txtGap.Enabled = $true; $txtCountdown.Enabled = $true
-    $btnSavePreset.Enabled = $true; $btnLoadPreset.Enabled = $true; $btnDelPreset.Enabled = $true
+    $btnSavePreset.Enabled = $true; $btnNewPreset.Enabled = $true
+    $btnLoadPreset.Enabled = $true; $btnDelPreset.Enabled = $true
     $cmbPreset.Enabled = $true
     $btnStart.Text = "开始  (F9)"
     $lblStatus.Text = "已停止（共 $($script:doneRounds) 轮、$($script:totalClicks) 次点击）"
