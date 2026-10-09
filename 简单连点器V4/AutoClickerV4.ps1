@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  简单连点器 v4.1（可视化版 · 参考"自动点击器-连点器"）
+#  简单连点器 v4.3（可视化版 · 参考"自动点击器-连点器"）
 #  功能：
 #   1. 可视化点击圈：全屏透明覆盖层，每个任务显示圆圈+序号（1、2、3…）
 #   2. 圈圈交互：拖动改坐标 · 右键删除该任务 · 运行中当前点高亮
@@ -10,7 +10,7 @@
 #   7. 随机偏移：每任务可设 ±N 像素，点击位置随机抖动
 #   8. 执行轮数限制（0=无限）+ 轮间间隔 + 开始前倒计时
 #   9. 预设方案：下拉框选中即加载，新建 / 保存(覆盖当前) / 删除
-#  10. 全局热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存当前预设
+#  10. 全局热键：F8 开始/停止 · F9 拾取并添加 · F10 拾取选中 · F11 添加任务 · F12 保存当前预设
 #  11. 配置自动保存（%APPDATA%\SimpleAutoClickerV4\config.json）
 #  使用：双击 exe 或同目录「启动连点器V4.bat」，零依赖、绿色无害
 # ============================================================
@@ -99,6 +99,19 @@ public class MouseSim {
 }
 "@
 
+# ---------- 3.5 窗口层级工具：置顶但不抢焦点（修复覆盖层 BringToFront 抢焦点导致输入框失焦） ----------
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32Top {
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+    // HWND_TOPMOST=-1；SWP_NOSIZE=1, SWP_NOMOVE=2, SWP_NOACTIVATE=0x10
+    public static void TopMostNoActivate(IntPtr h) {
+        SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+    }
+}
+"@
+
 # ---------- 4. 可视化点击圈：全屏透明覆盖层（参考"自动点击器-连点器"） ----------
 #  · 圈画在覆盖层上，覆盖层 TopMost 永远在最上
 #  · 运行时 Locked=true：WM_NCHITTEST 全穿透，点击直达目标内容（圈不挡鼠标）
@@ -117,6 +130,7 @@ public class CircleOverlay : Form {
     public static int Current = -1;                // 运行时高亮序号（-1 = 无）
     private static bool _locked = false;           // 运行中：穿透 + 锁交互
     private static CircleOverlay _inst = null;     // 单例实例（SetPenetrate 用）
+    private static bool _pen = false;              // 当前是否已开启 WS_EX_TRANSPARENT 穿透
     public static Action<int,int,int> OnMoved;     // 拖放完成回调 (index, x, y)
     public static Action<int> OnRight;             // 右键回调 (index)
 
@@ -150,28 +164,45 @@ public class CircleOverlay : Form {
         this.HandleCreated += delegate {
             int ex = GetWindowLong(this.Handle, -20);
             SetWindowLong(this.Handle, -20, ex | 0x08000000 | 0x00000080);
-            if (_locked) SetPenetrate(true);
+            if (_locked) SetPenetrate(true); else SyncPenetrate();
         };
+    }
+
+    // 供 PowerShell 主循环调用的穿透同步入口（每 50ms 调用一次，避免依赖 Forms Timer）
+    public static void SyncPen() {
+        if (_inst == null || !_inst.IsHandleCreated) return;
+        if (_locked) return;                 // 运行中：穿透由 Locked setter 控制
+        _inst.SyncPenetrate();
     }
 
     // 动态切换鼠标穿透：WS_EX_TRANSPARENT (0x20) = 系统级点击穿透（跨进程有效）
     void SetPenetrate(bool p) {
         if (!this.IsHandleCreated) return;
+        if (p == _pen) return;
         int ex = GetWindowLong(this.Handle, -20);
         if (p) ex |= 0x00000020; else ex &= ~0x00000020;
         SetWindowLong(this.Handle, -20, ex);
+        _pen = p;
         this.Invalidate();
+    }
+
+    // 未运行时动态穿透：鼠标在圈上 -> 覆盖层可交互（拖/右键）；
+    // 不在圈上 -> 加 WS_EX_TRANSPARENT 穿透，点击直达下层窗口（主窗体/目标程序）
+    void SyncPenetrate() {
+        Point scr = Cursor.Position;
+        bool onCircle = false;
+        for (int i = 0; i < Pts.Length; i++) {
+            double dx = scr.X - Pts[i].X, dy = scr.Y - Pts[i].Y;
+            if (dx*dx + dy*dy <= HIT_R*HIT_R) { onCircle = true; break; }
+        }
+        SetPenetrate(!onCircle);
     }
 
     protected override void WndProc(ref Message m) {
         if (m.Msg == 0x84) { // WM_NCHITTEST：命中测试决定鼠标穿透
             if (Locked) { m.Result = new IntPtr(-1); return; }        // 运行中全穿透
-            Point scr = Cursor.Position;
-            for (int i = 0; i < Pts.Length; i++) {
-                double dx = scr.X - Pts[i].X, dy = scr.Y - Pts[i].Y;
-                if (dx*dx + dy*dy <= HIT_R*HIT_R) { m.Result = new IntPtr(1); return; } // 圈内：可交互
-            }
-            m.Result = new IntPtr(-1); return;                         // 圈外：穿透
+            SyncPenetrate();                                          // 圈外穿透 / 圈内交互
+            m.Result = new IntPtr(1); return;                         // 命中由 WS_EX_TRANSPARENT 决定
         }
         base.WndProc(ref m);
     }
@@ -267,11 +298,12 @@ function Test-DelayString([string]$s) {
 
 # ---------- 7. 创建主窗口（普通窗口：不抢 TopMost 层级，圈层永远在最上） ----------
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "简单连点器 v4.1（可视化）"
+$form.Text = "简单连点器 v4.3（可视化）"
 $form.Size = New-Object System.Drawing.Size(680, 590)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
+$form.TopMost = $true   # 主窗体置顶：保证点击输入框/按钮不被其他窗口盖住（运行时自动取消）
 
 # ---------- 8. 任务列表 ----------
 $lblTasks = New-Object System.Windows.Forms.Label
@@ -287,6 +319,8 @@ $dgv.AllowUserToDeleteRows = $true
 $dgv.RowHeadersVisible = $false
 $dgv.SelectionMode = "FullRowSelect"
 $dgv.MultiSelect = $false
+# 单击单元格立即进入编辑态（用户点一下延时数字就能直接删改，不必双击）
+$dgv.EditMode = [System.Windows.Forms.DataGridViewEditMode]::EditOnEnter
 $dgv.AutoSizeColumnsMode = "Fill"
 $dgv.BackgroundColor = [System.Drawing.Color]::White
 
@@ -439,7 +473,7 @@ $form.Controls.Add($btnDelPreset)
 
 # ---------- 12. 提示 + 状态栏 + 开始按钮 ----------
 $lblHotkey = New-Object System.Windows.Forms.Label
-$lblHotkey.Text = "热键：F9 开始/停止 · F10 拾取位置 · F11 添加任务 · F12 保存当前预设"
+$lblHotkey.Text = "热键：F8 开始/停止 · F9 拾取并添加 · F10 拾取选中行 · F11 添加任务 · F12 保存当前预设"
 $lblHotkey.Location = New-Object System.Drawing.Point(12, 412)
 $lblHotkey.Size = New-Object System.Drawing.Size(620, 25)
 $lblHotkey.ForeColor = [System.Drawing.Color]::DarkBlue
@@ -451,13 +485,13 @@ $lblCircle.Size = New-Object System.Drawing.Size(620, 25)
 $lblCircle.ForeColor = [System.Drawing.Color]::DarkOrange
 
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Text = "就绪：下拉框选预设即加载 · 添加任务后按 F9 开始"
+$lblStatus.Text = "就绪：F9 直接拾取并添加 · 拖动圈改坐标 · F8 开始"
 $lblStatus.Location = New-Object System.Drawing.Point(12, 468)
 $lblStatus.Size = New-Object System.Drawing.Size(620, 25)
 $lblStatus.ForeColor = [System.Drawing.Color]::Gray
 
 $btnStart = New-Object System.Windows.Forms.Button
-$btnStart.Text = "开始  (F9)"
+$btnStart.Text = "开始  (F8)"
 $btnStart.Location = New-Object System.Drawing.Point(12, 505)
 $btnStart.Size = New-Object System.Drawing.Size(150, 45)
 
@@ -657,12 +691,12 @@ $script:tasks = @()
 function Update-Status {
     if ($script:phase -eq "countdown") {
         $sec = [math]::Ceiling($script:cdLeft / 10)
-        $lblStatus.Text = "倒计时：$sec 秒后开始执行（按 F9 取消）"
+        $lblStatus.Text = "倒计时：$sec 秒后开始执行（按 F8 取消）"
     } elseif ($script:phase -eq "between") {
         $sec = [math]::Ceiling($script:betweenLeft / 10)
-        $lblStatus.Text = "轮间等待：$sec 秒 · 已完成 $($script:doneRounds) 轮 · 共 $($script:totalClicks) 次点击 · F9 停止"
+        $lblStatus.Text = "轮间等待：$sec 秒 · 已完成 $($script:doneRounds) 轮 · 共 $($script:totalClicks) 次点击 · F8 停止"
     } else {
-        $lblStatus.Text = "运行中：任务 $($script:curRow+1)/$($script:taskCount) · 第 $($script:doneRounds+1) 轮 · 共 $($script:totalClicks) 次点击 · F9 停止"
+        $lblStatus.Text = "运行中：任务 $($script:curRow+1)/$($script:taskCount) · 第 $($script:doneRounds+1) 轮 · 共 $($script:totalClicks) 次点击 · F8 停止"
     }
 }
 
@@ -806,7 +840,8 @@ function Start-Clicker {
     $script:doneRounds = 0
     $script:totalClicks = 0
     $script:running = $true
-    $btnStart.Text = "停止  (F9)"
+    $btnStart.Text = "停止  (F8)"
+    $form.TopMost = $false   # 运行时主窗体不置顶：不挡目标窗口画面
     $lblStatus.ForeColor = [System.Drawing.Color]::Green
 
     # 锁定覆盖层：运行中圈完全点击穿透（点击直达目标），禁止拖动/删除
@@ -836,7 +871,8 @@ function Stop-Clicker {
     $btnSavePreset.Enabled = $true; $btnNewPreset.Enabled = $true
     $btnDelPreset.Enabled = $true
     $cmbPreset.Enabled = $true
-    $btnStart.Text = "开始  (F9)"
+    $btnStart.Text = "开始  (F8)"
+    $form.TopMost = $true    # 恢复主窗体置顶，方便继续操作
     $lblStatus.Text = "已停止（共 $($script:doneRounds) 轮、$($script:totalClicks) 次点击）"
     $lblStatus.ForeColor = [System.Drawing.Color]::Gray
 
@@ -850,16 +886,24 @@ $btnStart.Add_Click({
     if ($script:running) { Stop-Clicker } else { Start-Clicker }
 })
 
-# ---------- 18. 全局热键 F9~F12 ----------
+# ---------- 18. 全局热键 F8~F12 ----------
 $hotkeyTimer = New-Object System.Windows.Forms.Timer
 $hotkeyTimer.Interval = 100
 $hotkeyTimer.Add_Tick({
-    # F9：开始 / 停止
-    if ([MouseSim]::WasKeyPressed(0x78)) {
+    # F8：开始 / 停止
+    if ([MouseSim]::WasKeyPressed(0x77)) {
         if ($script:running) { Stop-Clicker } else { Start-Clicker }
     }
 
-    # F10：拾取鼠标位置（运行中不响应）
+    # F9：拾取当前位置并添加为新任务（不用回表格选空行，连续按连续加）
+    if ([MouseSim]::WasKeyPressed(0x78) -and -not $script:running) {
+        $pos = [System.Windows.Forms.Cursor]::Position
+        Add-TaskRow $pos.X $pos.Y
+        $lblStatus.Text = "已拾取 ($($pos.X), $($pos.Y)) 添加为任务"
+        $lblStatus.ForeColor = [System.Drawing.Color]::DarkOrange
+    }
+
+    # F10：拾取鼠标位置填入选中行（运行中不响应）
     if ([MouseSim]::WasKeyPressed(0x79) -and -not $script:running) {
         $pos = [System.Windows.Forms.Cursor]::Position
         if ($dgv.CurrentRow -and -not $dgv.CurrentRow.IsNewRow) {
@@ -888,12 +932,12 @@ $hotkeyTimer.Add_Tick({
 })
 $hotkeyTimer.Start()
 
-# 覆盖层 z-order 维持（TopMost 组件竞争时保持圈在最上，不抢焦点）
+# 覆盖层 z-order 维持（保持圈在最上；只置顶不抢焦点，避免主窗体输入框失焦）
 $zTimer = New-Object System.Windows.Forms.Timer
 $zTimer.Interval = 500
 $zTimer.Add_Tick({
-    if ($script:overlayReady -and $null -ne $script:overlay) {
-        try { $script:overlay.BringToFront() } catch {}
+    if ($script:overlayReady -and $null -ne $script:overlay -and $script:overlay.IsHandleCreated) {
+        try { [Win32Top]::TopMostNoActivate($script:overlay.Handle) } catch {}
     }
 })
 $zTimer.Start()
@@ -929,7 +973,8 @@ try {
     $form.Show()
 
     while (-not $form.IsDisposed) {
-
+        # 主循环直接驱动覆盖层动态穿透（鼠标在圈上 -> 可拖；圈外 -> 点击穿透）
+        if ($script:overlayReady -and $null -ne $script:overlay) { [CircleOverlay]::SyncPen() | Out-Null }
         [System.Windows.Forms.Application]::DoEvents()
         Start-Sleep -Milliseconds 50
     }
